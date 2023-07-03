@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import base64
 
-def calculate_allocations(shortages_df, excesses_df):
+def calculate_allocations(shortages_df, excesses_df, use_original_calculation):
     shortages_df = shortages_df.sort_values(by='Supply new needed', ascending=False)
     excesses_df = excesses_df[excesses_df['Location Type'] == 'MAIN']
     excesses_df['Excess-Usage Index'] = excesses_df.apply(lambda row: row['EXCESS'] * (1/row['Avg Usage + Usage via dependents']) if row['Avg Usage + Usage via dependents'] != 0 else row['EXCESS'], axis=1)
@@ -32,7 +32,12 @@ def calculate_allocations(shortages_df, excesses_df):
                 transferred_qty += transfer_qty
 
         if transferred_qty < shortage:
-            shortages_df.at[shortage_row.name, 'Supply new needed'] = shortage - transferred_qty
+            if use_original_calculation:
+                shortages_df.at[shortage_row.name, 'Supply new needed'] = shortage - transferred_qty
+            else:
+                updated_shortage = shortage - transferred_qty
+                shortages_df.at[shortage_row.name, 'Supply new needed'] = updated_shortage
+                shortage = updated_shortage
 
     unfulfilled_shortages = shortages_df[shortages_df['Supply new needed'] > 0]
     excesses_df['Excess-Usage Index'] = excesses_df.apply(lambda row: row['EXCESS'] * (1/row['Avg Usage + Usage via dependents']) if row['Avg Usage + Usage via dependents'] != 0 else row['EXCESS'], axis=1)
@@ -41,6 +46,9 @@ def calculate_allocations(shortages_df, excesses_df):
 
 def main():
     st.title("Allocation App")
+    st.write("""In the original shortage calculation method, the new shortage values are not updated after each transfer. The original code deducts the transferred quantity from the current shortage, but it doesn't assign this updated value back to the shortage row in the shortages dataframe. As a result, the shortage values remain unchanged throughout the allocation process.
+
+In the default method, the new shortage values are updated correctly after each transfer. After each successful transfer, the code updates the shortage value in the shortages dataframe by subtracting the transferred quantity from the current shortage value. This ensures that the updated shortage values reflect the remaining shortage after each transfer is made.""")
     option = st.sidebar.selectbox("Choose an option:", ("Load Example File", "Upload New File"))
 
     if option == "Load Example File":
@@ -67,7 +75,11 @@ def main():
             xl = pd.ExcelFile(file_path)
             shortages_df = xl.parse("Shortages")
             excesses_df = xl.parse("Excesses")
-            allocations, unfulfilled_shortages = calculate_allocations(shortages_df, excesses_df)
+
+            st.subheader("Calculation Method")
+            use_original_calculation = st.checkbox("Use Original Shortage Calculation Method")
+            
+            allocations, unfulfilled_shortages = calculate_allocations(shortages_df, excesses_df, use_original_calculation)
             final_shortages = shortages_df.copy()
             final_shortages.loc[unfulfilled_shortages.index, 'Status'] = 'Unfulfilled'
 
@@ -132,7 +144,7 @@ def main():
         download_options(final_shortages, "Final Rolling Shortage")
 
     except Exception as e:
-        st.error("Error: Unable to process the file.")
+        st.error("Error: Unable to load or process the data.")
         st.error(str(e))
 
 def download_options(data, name):
