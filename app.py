@@ -68,7 +68,8 @@ def main():
             shortages_df = xl.parse("Shortages")
             excesses_df = xl.parse("Excesses")
             allocations, unfulfilled_shortages = calculate_allocations(shortages_df, excesses_df)
-            final_shortages = unfulfilled_shortages.copy()
+            final_shortages = shortages_df.copy()
+            final_shortages.loc[unfulfilled_shortages.index, 'Status'] = 'Unfulfilled'
 
         st.subheader("Search")
         search_text = st.text_input("Enter search text", "")
@@ -89,13 +90,13 @@ def main():
             if unfulfilled_shortages.empty:
                 st.info("No unfulfilled shortages.")
             else:
-                st.dataframe(unfulfilled_shortages[['Client Warehouse code', 'Supply new needed']])
+                st.dataframe(unfulfilled_shortages)
         else:
             filtered_unfulfilled_shortages = unfulfilled_shortages[unfulfilled_shortages.astype(str).apply(lambda x: x.str.contains(search_text, case=False)).any(axis=1)]
             if filtered_unfulfilled_shortages.empty:
                 st.warning("No matching records found.")
             else:
-                st.dataframe(filtered_unfulfilled_shortages[['Client Warehouse code', 'Supply new needed']])
+                st.dataframe(filtered_unfulfilled_shortages)
 
         st.subheader("Transfers Made")
         transfers_df = allocations_df.copy()
@@ -116,19 +117,19 @@ def main():
             if final_shortages.empty:
                 st.info("No final rolling shortage.")
             else:
-                st.dataframe(final_shortages[['Part ID', 'Supply new needed']])
+                st.dataframe(final_shortages)
         else:
             filtered_final_shortages = final_shortages[final_shortages.astype(str).apply(lambda x: x.str.contains(search_text, case=False)).any(axis=1)]
             if filtered_final_shortages.empty:
                 st.warning("No matching records found.")
             else:
-                st.dataframe(filtered_final_shortages[['Part ID', 'Supply new needed']])
+                st.dataframe(filtered_final_shortages)
 
         # Download options
         download_options(allocations_df, "Allocations")
-        download_options(unfulfilled_shortages[['Client Warehouse code', 'Supply new needed']], "Unfulfilled Shortages")
+        download_options(unfulfilled_shortages, "Unfulfilled Shortages")
         download_options(transfers_df[['Transfer']], "Transfers Made")
-        download_options(final_shortages[['Part ID', 'Supply new needed']], "Final Rolling Shortage")
+        download_options(final_shortages, "Final Rolling Shortage")
 
     except Exception as e:
         st.error("Error: Unable to process the file.")
