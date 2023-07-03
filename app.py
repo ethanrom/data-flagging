@@ -7,43 +7,36 @@ def calculate_allocations(shortages_df, excesses_df):
     excesses_df = excesses_df[excesses_df['Location Type'] == 'MAIN']
     excesses_df['Excess-Usage Index'] = excesses_df.apply(lambda row: row['EXCESS'] * (1/row['Avg Usage + Usage via dependents']) if row['Avg Usage + Usage via dependents'] != 0 else row['EXCESS'], axis=1)
     excesses_df = excesses_df.sort_values(by='Excess-Usage Index', ascending=False)
-    shortages_df['Rolling Stock'] = shortages_df.groupby('Client Warehouse code')['Supply new needed'].transform('sum')
-    shortages_df['Rolling Shortage'] = shortages_df['Supply new needed']
     allocations = []
+
     for _, shortage_row in shortages_df.iterrows():
         part_id = shortage_row['Client Warehouse code']
-        shortage = shortage_row['Rolling Shortage']        
-        for _, excess_row in excesses_df.iterrows():
-            if excess_row['EXCESS'] >= shortage:
-                excesses_df.at[excess_row.name, 'EXCESS'] -= shortage
-                excesses_df.at[excess_row.name, 'Excess-Usage Index'] = excesses_df.at[excess_row.name, 'EXCESS'] * \
-                    (1/excesses_df.at[excess_row.name, 'Avg Usage + Usage via dependents']) if excesses_df.at[excess_row.name, 'Avg Usage + Usage via dependents'] != 0 else \
-                    excesses_df.at[excess_row.name, 'EXCESS']
-                allocations.append({
-                    'From': excess_row['Client Warehouse code'],
-                    'To': shortage_row['Client Warehouse code'],
-                    'Part ID': part_id,
-                    'Quantity': shortage
-                })
-                shortage = 0
-                break
-            else:
-                excesses_df.at[excess_row.name, 'Excess-Usage Index'] = excesses_df.at[excess_row.name, 'EXCESS'] * \
-                    (1/excesses_df.at[excess_row.name, 'Avg Usage + Usage via dependents']) if excesses_df.at[excess_row.name, 'Avg Usage + Usage via dependents'] != 0 else \
-                    excesses_df.at[excess_row.name, 'EXCESS']
-                short_fulfilled = excesses_df.at[excess_row.name, 'EXCESS']
-                shortage -= short_fulfilled
-                allocations.append({
-                    'From': excess_row['Client Warehouse code'],
-                    'To': shortage_row['Client Warehouse code'],
-                    'Part ID': part_id,
-                    'Quantity': short_fulfilled
-                })
-                excesses_df.at[excess_row.name, 'EXCESS'] = 0
-        shortages_df.at[shortage_row.name, 'Rolling Shortage'] = shortage
+        shortage = shortage_row['Supply new needed']
+        transferred_qty = 0
 
+        for _, excess_row in excesses_df.iterrows():
+            if transferred_qty >= shortage:
+                break
+            if excess_row['EXCESS'] > 0:
+                transfer_qty = min(shortage - transferred_qty, excess_row['EXCESS'])
+                excesses_df.at[excess_row.name, 'EXCESS'] -= transfer_qty
+                excesses_df.at[excess_row.name, 'Excess-Usage Index'] = excesses_df.at[excess_row.name, 'EXCESS'] * \
+                    (1/excesses_df.at[excess_row.name, 'Avg Usage + Usage via dependents']) if excesses_df.at[excess_row.name, 'Avg Usage + Usage via dependents'] != 0 else \
+                    excesses_df.at[excess_row.name, 'EXCESS']
+                allocations.append({
+                    'From': excess_row['Client Warehouse code'],
+                    'To': shortage_row['Client Warehouse code'],
+                    'Part ID': part_id,
+                    'Quantity': transfer_qty
+                })
+                transferred_qty += transfer_qty
+
+        if transferred_qty < shortage:
+            shortages_df.at[shortage_row.name, 'Supply new needed'] = shortage - transferred_qty
+
+    unfulfilled_shortages = shortages_df[shortages_df['Supply new needed'] > 0]
     excesses_df['Excess-Usage Index'] = excesses_df.apply(lambda row: row['EXCESS'] * (1/row['Avg Usage + Usage via dependents']) if row['Avg Usage + Usage via dependents'] != 0 else row['EXCESS'], axis=1)
-    unfulfilled_shortages = shortages_df[shortages_df['Rolling Shortage'] > 0]
+
     return allocations, unfulfilled_shortages
 
 def main():
@@ -75,30 +68,67 @@ def main():
             shortages_df = xl.parse("Shortages")
             excesses_df = xl.parse("Excesses")
             allocations, unfulfilled_shortages = calculate_allocations(shortages_df, excesses_df)
+            final_shortages = unfulfilled_shortages.copy()
+
+        st.subheader("Search")
+        search_text = st.text_input("Enter search text", "")
 
         st.subheader("Allocations")
         allocations_df = pd.DataFrame(allocations)
-        st.dataframe(allocations_df)
+        if not search_text:
+            st.dataframe(allocations_df)
+        else:
+            filtered_allocations_df = allocations_df[allocations_df.astype(str).apply(lambda x: x.str.contains(search_text, case=False)).any(axis=1)]
+            if filtered_allocations_df.empty:
+                st.warning("No matching records found.")
+            else:
+                st.dataframe(filtered_allocations_df)
 
         st.subheader("Unfulfilled Shortages")
-        st.dataframe(unfulfilled_shortages[['Client Warehouse code', 'Rolling Shortage']])
+        if not search_text:
+            if unfulfilled_shortages.empty:
+                st.info("No unfulfilled shortages.")
+            else:
+                st.dataframe(unfulfilled_shortages[['Client Warehouse code', 'Supply new needed']])
+        else:
+            filtered_unfulfilled_shortages = unfulfilled_shortages[unfulfilled_shortages.astype(str).apply(lambda x: x.str.contains(search_text, case=False)).any(axis=1)]
+            if filtered_unfulfilled_shortages.empty:
+                st.warning("No matching records found.")
+            else:
+                st.dataframe(filtered_unfulfilled_shortages[['Client Warehouse code', 'Supply new needed']])
 
         st.subheader("Transfers Made")
         transfers_df = allocations_df.copy()
-        transfers_df['Transfer'] = transfers_df['Part ID'] + ' || ' + transfers_df['From'] + ' --> ' + transfers_df[
-            'Part ID'] + ' || ' + transfers_df['To'] + ' x ' + transfers_df['Quantity'].astype(str)
-        st.dataframe(transfers_df[['Transfer']])
+        transfers_df['Transfer'] = transfers_df['Part ID'] + ' || ' + transfers_df['From'] + ' --> ' + transfers_df['Part ID'] + ' || ' + transfers_df[
+            'To'] + ' x ' + transfers_df['Quantity'].astype(str)
+        if not search_text:
+            st.dataframe(transfers_df[['Transfer']])
+        else:
+            filtered_transfers_df = transfers_df[transfers_df.astype(str).apply(lambda x: x.str.contains(search_text, case=False)).any(axis=1)]
+            if filtered_transfers_df.empty:
+                st.warning("No matching records found.")
+            else:
+                st.dataframe(filtered_transfers_df[['Transfer']])
 
+        final_shortages.rename(columns={'Client Warehouse code': 'Part ID'}, inplace=True)
         st.subheader("Final Rolling Shortage")
-        final_shortage_df = unfulfilled_shortages.copy()
-        final_shortage_df.rename(columns={'Client Warehouse code': 'Part ID'}, inplace=True)
-        st.dataframe(final_shortage_df[['Part ID', 'Rolling Shortage']])
+        if not search_text:
+            if final_shortages.empty:
+                st.info("No final rolling shortage.")
+            else:
+                st.dataframe(final_shortages[['Part ID', 'Supply new needed']])
+        else:
+            filtered_final_shortages = final_shortages[final_shortages.astype(str).apply(lambda x: x.str.contains(search_text, case=False)).any(axis=1)]
+            if filtered_final_shortages.empty:
+                st.warning("No matching records found.")
+            else:
+                st.dataframe(filtered_final_shortages[['Part ID', 'Supply new needed']])
 
         # Download options
         download_options(allocations_df, "Allocations")
-        download_options(unfulfilled_shortages[['Client Warehouse code', 'Rolling Shortage']], "Unfulfilled Shortages")
+        download_options(unfulfilled_shortages[['Client Warehouse code', 'Supply new needed']], "Unfulfilled Shortages")
         download_options(transfers_df[['Transfer']], "Transfers Made")
-        download_options(final_shortage_df[['Part ID', 'Rolling Shortage']], "Final Rolling Shortage")
+        download_options(final_shortages[['Part ID', 'Supply new needed']], "Final Rolling Shortage")
 
     except Exception as e:
         st.error("Error: Unable to process the file.")
