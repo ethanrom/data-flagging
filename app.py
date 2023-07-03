@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import base64
 
+
 def calculate_allocations(shortages_df, excesses_df, use_original_calculation):
     shortages_df = shortages_df.sort_values(by='Supply new needed', ascending=False)
     excesses_df = excesses_df[excesses_df['Location Type'] == 'MAIN']
